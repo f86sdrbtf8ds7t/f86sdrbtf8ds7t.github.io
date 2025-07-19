@@ -6,6 +6,8 @@ on:
 jobs:
   run-backend:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Добавляем права на запись в репозиторий
     steps:
       - uses: actions/checkout@v3
       - name: Set up Node.js
@@ -23,5 +25,12 @@ jobs:
         run: node server.js &
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+      - name: Commit backend-url.json
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          git add backend-url.json
+          git commit -m "Update backend-url.json" || echo "No changes to commit"
+          git push
       - name: Keep workflow alive
-        run: sleep 1800 # Keep server running for half hour
+        run: sleep 3600 # Keep server running for 1 hour
