@@ -1,0 +1,207 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Скачивание видео с YouTube и TikTok</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex items-center justify-center h-screen">
+    <div class="bg-white p-8 rounded-lg shadow-lg w-full max-w-lg">
+        <h1 class="text-3xl font-bold mb-6 text-center text-gray-800">Скачивание видео</h1>
+        <input id="videoUrl" type="text" placeholder="Вставьте ссылку на видео (YouTube или TikTok)" class="w-full p-3 mb-4 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <button onclick="checkBackendAndDownload()" class="w-full bg-blue-600 text-white p-3 rounded-lg hover:bg-blue-700 transition">Скачать</button>
+        <p id="status" class="mt-4 text-center text-red-500 hidden"></p>
+        <div id="downloadLinks" class="mt-4 hidden">
+            <h3 class="text-lg font-semibold mb-2">Доступные форматы:</h3>
+            <ul id="linksList" class="space-y-2"></ul>
+        </div>
+    </div>
+
+    <script>
+        async function checkBackendAndDownload() {
+            const status = document.getElementById('status');
+            const downloadLinks = document.getElementById('downloadLinks');
+            const linksList = document.getElementById('linksList');
+            const videoUrl = document.getElementById('videoUrl').value.trim();
+
+            status.classList.add('hidden');
+            downloadLinks.classList.add('hidden');
+            linksList.innerHTML = '';
+
+            if (!videoUrl) {
+                status.textContent = 'Ошибка: вставьте ссылку на видео';
+                status.classList.remove('hidden');
+                return;
+            }
+
+            if (!videoUrl.includes('youtube.com') && !videoUrl.includes('youtu.be') && !videoUrl.includes('tiktok.com')) {
+                status.textContent = 'Ошибка: поддерживаются только ссылки на YouTube или TikTok';
+                status.classList.remove('hidden');
+                return;
+            }
+
+            status.textContent = 'Проверка бэкенда...';
+            status.classList.remove('hidden', 'text-red-500');
+            status.classList.add('text-blue-500');
+
+            try {
+                // Получаем URL бэкенда из файла в репозитории
+                const backendUrlResponse = await fetch('backend-url.json');
+                const backendData = await backendUrlResponse.json();
+                const backendUrl = backendData.url;
+
+                // Проверяем доступность бэкенда
+                const backendCheck = await fetch(`${backendUrl}/health`, { method: 'GET' });
+                if (backendCheck.ok) {
+                    await downloadVideo(backendUrl, videoUrl);
+                } else {
+                    throw new Error('Бэкенд недоступен');
+                }
+            } catch (error) {
+                status.textContent = 'Бэкенд недоступен, запускаем...';
+                await triggerBackend();
+                await waitForBackend();
+            }
+        }
+
+        async function triggerBackend() {
+            const token = 'YOUR_GITHUB_TOKEN'; // Замените на ваш GitHub Personal Access Token
+            const repo = 'YOUR_USERNAME/YOUR_REPO'; // Замените на ваш репозиторий
+            const apiUrl = `https://api.github.com/repos/${repo}/contents/trigger.txt`;
+
+            try {
+                // Получаем текущий SHA файла trigger.txt
+                const response = await fetch(apiUrl, {
+                    headers: { Authorization: `token ${token}` }
+                });
+                const data = await response.json();
+                const sha = data.sha;
+
+                // Обновляем файл trigger.txt
+                await fetch(apiUrl, {
+                    method: 'PUT',
+                    headers: {
+                        Authorization: `token ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: 'Trigger backend',
+                        content: btoa(Date.now().toString()), // Обновляем содержимое
+                        sha: sha
+                    })
+                });
+            } catch (error) {
+                document.getElementById('status').textContent = 'Ошибка при запуске бэкенда';
+                document.getElementById('status').classList.remove('hidden', 'text-blue-500');
+                document.getElementById('status').classList.add('text-red-500');
+                console.error(error);
+            }
+        }
+
+        async function waitForBackend() {
+            const status = document.getElementById('status');
+            const maxAttempts = 90; // Максимум 3 минуты (90 * 2 секунды)
+            let attempts = 0;
+
+            status.textContent = 'Ожидание бэкенда...';
+
+            const interval = setInterval(async () => {
+                attempts++;
+                try {
+                    const backendUrlResponse = await fetch('backend-url.json');
+                    const backendData = await backendUrlResponse.json();
+                    const backendUrl = backendData.url;
+
+                    const backendCheck = await fetch(`${backendUrl}/health`, { method: 'GET' });
+                    if (backendCheck.ok) {
+                        clearInterval(interval);
+                        status.textContent = 'Бэкенд готов, обновляем страницу...';
+                        status.classList.remove('text-blue-500');
+                        status.classList.add('text-green-500');
+                        setTimeout(() => location.reload(), 1000); // Обновляем через 1 секунду
+                    }
+                } catch (error) {
+                    if (attempts >= maxAttempts) {
+                        clearInterval(interval);
+                        status.textContent = 'Ошибка: бэкенд не запустился';
+                        status.classList.remove('text-blue-500');
+                        status.classList.add('text-red-500');
+                    }
+                }
+            }, 2000); // Проверка каждые 2 секунды
+        }
+
+        async function downloadVideo(backendUrl, videoUrl) {
+            const status = document.getElementById('status');
+            const downloadLinks = document.getElementById('downloadLinks');
+            const linksList = document.getElementById('linksList');
+
+            try {
+                const response = await fetch(`${backendUrl}/download?url=${encodeURIComponent(videoUrl)}`);
+                const data = await response.json();
+
+                if (data.downloadUrl) {
+                    downloadLinks.classList.remove('hidden');
+                    const li = document.createElement('li');
+                    const a = document.createElement('a');
+                    a.href = data.downloadUrl;
+                    a.textContent = 'Скачать видео (MP4)';
+                    a.classList.add('text-blue-600', 'underline');
+                    li.appendChild(a);
+                    linksList.appendChild(li);
+                    status.textContent = 'Готово!';
+                    status.classList.remove('text-blue-500');
+                    status.classList.add('text-green-500');
+                } else {
+                    throw new Error('Не удалось получить ссылку');
+                }
+            } catch (error) {
+                status.textContent = 'Ошибка при скачивании';
+                status.classList.remove('hidden', 'text-blue-500');
+                status.classList.add('text-red-500');
+                console.error(error);
+            }
+        }
+    </script>
+</body>
+</html>
